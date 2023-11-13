@@ -7,7 +7,6 @@ from time import sleep, perf_counter
 
 # I've tried cython, numba, multiprocessing but any of these seems to work,
 # they tend to slow it even more for whatever reason...
-from numba import jit
 import multiprocessing as mp
 
 pygame.init()
@@ -38,15 +37,13 @@ pygame.display.set_caption('Pyita')
 
 class Particle():
 
-    __slots__ = ['x', 'y', 'type', 'color', 'age', 'chaos', 'direction']
+    __slots__ = ['x', 'y', 'type', 'color', 'age']
 
     def __init__(self, type, x, y, color=BRIGHT):
         self.age = perf_counter()
         self.x, self.y = (x, y)
         self.color = color
         self.type = type # sand, water, smoke, etc.
-        self.chaos = 0
-        self.direction = 0
 
     def update(self):
         match self.type:
@@ -56,35 +53,41 @@ class Particle():
                 particles_grid[self.y, self.x] = 0
                 for _ in range(10):
                     o = offset.pop(random.randint(0, len(offset)-1))
-                    if not particles_grid[self.y+1, self.x+o]:
+                    if not particles_grid[self.y + 1, self.x + o]:
                         self.x += o
                         self.y += 1
                         break
+                    try:
+                        if particles_grid[self.y + 1, self.x + o].type == 'water':
+                            self.swap_position(particles_grid[self.y + 1, self.x + o])
+                    except AttributeError:
+                        continue
                 particles_grid[self.y, self.x] = Particle('sand', self.x, self.y, color=self.color)
 
             case 'water':
-                # bunch of rules for water movement, looks trivial but it does the job
-                particles_grid[self.y, self.x] = 0
-
-                self.chaos = random.randrange(-1, 2, step=1)
-
                 self.color = choice([WATER_BRIGHT, WATER_DARK])
-                #if (self.x, self.y+1) not in particles_set:
-                if not particles_grid[self.y+1, self.x]:
+                particles_grid[self.y, self.x] = 0
+                direction = random.randrange(-1, 2, 2)
+
+                if not particles_grid[self.y + 1, self.x]:
                     self.y += 1
-                    self.direction = random.randrange(-1, 2, step=2)
-                else:
-                    if not particles_grid[self.y, self.x + self.chaos]:
-                        self.x += self.chaos
 
-                if not particles_grid[self.y, self.x + self.direction]:
-                    # check if there's abstacle, then change direction
-                    self.direction *= -1
+                if direction == 1:
+                    for offset in range(1, WIDTH//5 - self.x):
+                        if not particles_grid[self.y, self.x + (direction * offset)]:
+                            self.x += (direction * offset)
+                            break
 
-                self.x += self.direction
+                elif direction == -1:
+                    for offset in range(1, self.x):
+                        if not particles_grid[self.y, self.x + (direction * offset)]:
+                            self.x += (direction * offset)
+                            break
+
                 particles_grid[self.y, self.x] = Particle('water', self.x, self.y, color=self.color)
 
             case 'smoke':
+                """
                 # same logic as water but goes up (y-1)
                 self.chaos = random.randrange(-1, 2, step=1)
 
@@ -101,11 +104,17 @@ class Particle():
                     self.direction *= -1
 
                 self.x += self.direction
+                """
 
-    def switch_position(self, obj):
+    def swap_position(self, obj):
+        particles_grid[self.y,  self.x] = 0
+        particles_grid[obj.y,  obj.x] = 0
         temp_x, temp_y = self.x, self.y
         self.x, self.y = obj.x, obj.y
         obj.x, obj.y, = temp_x, temp_y
+        particles_grid[obj.y, obj.x] = Particle('water', obj.x, obj.y, color=obj.color)
+        self.draw()
+        obj.draw()
 
 
     def draw(self):
@@ -141,7 +150,7 @@ def spawn(x, y):
                     #particles_arr.append(Particle('water', x, y-size, color=WATER_BRIGHT))
             case 'smoke':
                 for size in range(0, brush_size+1):
-                    particles_arr.append(Particle('smoke', x, y-size, color=DARK))
+                    particles_grid[y-size, x] = Particle('smoke', x, y-size, color=choice([DARK, DARKER]))
 
 
 # NOT USED
@@ -155,26 +164,22 @@ def despawn(x, y):
 
 
 def update_particles():
-    for pix in particles_grid[1:143, 1:255].flatten():
-        if pix == 1 or pix == 0: continue
-        if all(particles_grid[pix.y + 1, (pix.x - 1):(pix.x + 2)]):
-            pix.draw()
-            continue
-        if pix:
-            if pix.type == 'smoke':
-                if perf_counter() - pix.age > 10:
-                    particles_grid[pix.y][pix.x] == 0
-            #if p.type == 'sand':
-                #if perf_counter() - p.age < 3:
-                    # If time of particle gets above 3 seconds it stops calculating which stops it from any movement
-                    # Python is too slow and this is the key optimization trick, I couldn't any find better solution...
-                    #p.update()
-            #if p.type == 'water':
-                #if random.randint(0, 100) < 5:
-                    ## 5% chance to update so it don't flick on sreen so much
-                #p.update()
-            pix.update()
-            pix.draw()
+    filtered_array = particles_grid[(particles_grid != 0) & (particles_grid != 1)]
+    for pix in filtered_array.flatten():
+        #if pix.type == 'sand':
+        #    if all(particles_grid[pix.y + 1, (pix.x - 1):(pix.x + 2)]):
+        #        pix.draw()
+        #        continue
+        if pix.type == 'water':
+            if all(particles_grid[pix.y]):
+                pix.color = choice([WATER_BRIGHT, WATER_DARK])
+                pix.draw()
+                continue
+        elif pix.type == 'smoke':
+            if perf_counter() - pix.age > 10:
+                particles_grid[pix.y][pix.x] == 0
+        pix.update()
+        pix.draw()
 
 
 def main():
@@ -195,15 +200,15 @@ def main():
             if event.type == pygame.QUIT:
                 run = False
 
-        if pygame.mouse.get_pressed()[0]:
-            # spawns particle on left mouse click
             mouse_x = pygame.mouse.get_pos()[0]
             mouse_y = pygame.mouse.get_pos()[1]
-            if (20 <= mouse_x < 160) and (80 <= mouse_y < 98):
-                change_brush()
-            x, y = (pygame.mouse.get_pos()[0],
-                    pygame.mouse.get_pos()[1])
-            spawn(x, y)
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if (20 <= mouse_x < 160) and (80 <= mouse_y < 98):
+                    change_brush()
+            if pygame.mouse.get_pressed()[0]:
+                # spawns particle on left mouse click
+                spawn(mouse_x, mouse_y)
 
 
             # NOT FIXED YET
